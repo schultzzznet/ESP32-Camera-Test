@@ -35,6 +35,9 @@ const char* password = WIFI_PASSWORD;
 httpd_handle_t camera_httpd = NULL;
 httpd_handle_t stream_httpd = NULL;
 
+// Forward declarations
+bool initCamera(framesize_t framesize = FRAMESIZE_SVGA);
+
 // HTML page for camera controls
 static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 <!DOCTYPE html>
@@ -148,16 +151,23 @@ static esp_err_t index_handler(httpd_req_t *req) {
 }
 
 static framesize_t parse_frame_size(const char *res) {
-  if (!res) return FRAMESIZE_VGA;
-  if (strcasecmp(res, "qqvga") == 0) return FRAMESIZE_QQVGA;
-  if (strcasecmp(res, "qvga") == 0) return FRAMESIZE_QVGA;
-  if (strcasecmp(res, "cif") == 0) return FRAMESIZE_CIF;
-  if (strcasecmp(res, "vga") == 0) return FRAMESIZE_VGA;
-  if (strcasecmp(res, "svga") == 0) return FRAMESIZE_SVGA;
-  if (strcasecmp(res, "xga") == 0) return FRAMESIZE_XGA;
-  if (strcasecmp(res, "sxga") == 0) return FRAMESIZE_SXGA;
-  if (strcasecmp(res, "uxga") == 0) return FRAMESIZE_UXGA;
-  return FRAMESIZE_VGA; // Fallback
+  if (!res) return FRAMESIZE_SVGA;
+  // All OV2640 supported resolutions (not all work in RGB565 mode)
+  if (strcasecmp(res, "96x96") == 0) return FRAMESIZE_96X96;       // 96x96
+  if (strcasecmp(res, "qqvga") == 0) return FRAMESIZE_QQVGA;      // 160x120
+  if (strcasecmp(res, "qcif") == 0) return FRAMESIZE_QCIF;        // 176x144
+  if (strcasecmp(res, "hqvga") == 0) return FRAMESIZE_HQVGA;      // 240x176
+  if (strcasecmp(res, "240x240") == 0) return FRAMESIZE_240X240;  // 240x240
+  if (strcasecmp(res, "qvga") == 0) return FRAMESIZE_QVGA;        // 320x240
+  if (strcasecmp(res, "cif") == 0) return FRAMESIZE_CIF;          // 400x296
+  if (strcasecmp(res, "hvga") == 0) return FRAMESIZE_HVGA;        // 480x320
+  if (strcasecmp(res, "vga") == 0) return FRAMESIZE_VGA;          // 640x480
+  if (strcasecmp(res, "svga") == 0) return FRAMESIZE_SVGA;        // 800x600 ✅ Works
+  if (strcasecmp(res, "xga") == 0) return FRAMESIZE_XGA;          // 1024x768 ⚠️ May crash
+  if (strcasecmp(res, "hd") == 0) return FRAMESIZE_HD;            // 1280x720 ❌ Crashes
+  if (strcasecmp(res, "sxga") == 0) return FRAMESIZE_SXGA;        // 1280x1024 ❌ Crashes
+  if (strcasecmp(res, "uxga") == 0) return FRAMESIZE_UXGA;        // 1600x1200 ❌ Crashes
+  return FRAMESIZE_SVGA; // Fallback to safe default
 }
 
 static esp_err_t capture_handler(httpd_req_t *req) {
@@ -194,12 +204,30 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   }
 
   // Apply sensor changes if requested (resolution)
+  // Reinitialize camera with new resolution to avoid buffer reallocation crashes
   sensor_t *s = esp_camera_sensor_get();
   if (s && desired_fs != s->status.framesize) {
-    printf("[CAPTURE] Changing frame size: %d -> %d\n", s->status.framesize, desired_fs);
-    Serial.printf("   🔧 Updating frame size: %d -> %d\n", s->status.framesize, desired_fs);
-    s->set_framesize(s, desired_fs);
-    delay(50);
+    printf("[CAPTURE] Resolution change: %d -> %d - REINITIALIZING CAMERA\n", s->status.framesize, desired_fs);
+    Serial.printf("   Deinitializing camera...\n");
+    
+    // Deinitialize current camera
+    esp_camera_deinit();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Reinitialize with new resolution
+    Serial.printf("   Reinitializing at resolution %d...\n", desired_fs);
+    if (!initCamera(desired_fs)) {
+      printf("[CAPTURE] ERROR: Failed to reinitialize camera\n");
+      Serial.println("   ❌ Camera reinit failed - attempting recovery");
+      // Try to recover with default SVGA
+      if (!initCamera(FRAMESIZE_SVGA)) {
+        const char *msg = "Camera reinitialization failed";
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg);
+        return ESP_FAIL;
+      }
+    } else {
+      Serial.println("   ✅ Camera reinitialized successfully");
+    }
   }
 
   printf("[CAPTURE] Acquiring frame buffer...\n");
@@ -234,10 +262,17 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   printf("[CAPTURE] Converting RGB565 to JPEG with quality=%d...\n", quality);
   Serial.println("   🔧 Converting RGB565 -> JPEG with software encoder");
   
+  // Keep watchdog happy during conversion
+  esp_task_wdt_reset();
+  
   // Convert RGB565 to JPEG using software encoder
   uint8_t *jpg_buf = NULL;
   size_t jpg_len = 0;
   unsigned long convert_start = millis();
+  
+  // Clamp quality to valid range (10-63 for ESP32)
+  if (quality < 10) quality = 10;
+  if (quality > 63) quality = 63;
   
   bool converted = frame2jpg(fb, quality, &jpg_buf, &jpg_len);
   unsigned long convert_time = millis() - convert_start;
@@ -492,8 +527,8 @@ void startCameraServer() {
   }
 }
 
-bool initCamera() {
-  Serial.println("\n📷 Initializing camera...");
+bool initCamera(framesize_t framesize) {
+  Serial.printf("\n📷 Initializing camera at resolution %d...\n", framesize);
   
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -516,10 +551,10 @@ bool initCamera() {
   config.pin_reset = CAM_PIN_RESET;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_RGB565;  // Use RGB565 to bypass OV2640 JPEG bugs
-  config.frame_size = FRAMESIZE_VGA;  // 640x480
+  config.frame_size = framesize;  // Use requested resolution
   config.jpeg_quality = 12;  // Will be used by software encoder
   config.fb_count = 2;
-  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.fb_location = CAMERA_FB_IN_PSRAM;  // Must use PSRAM for large RGB565 buffers
   config.grab_mode = CAMERA_GRAB_LATEST;
 
   Serial.printf("  Pixel Format: JPEG (with simple header patch for OV2640 bug)\n");
