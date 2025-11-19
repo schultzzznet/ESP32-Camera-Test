@@ -17,14 +17,15 @@ A high-performance camera web server for the **GOOUUU ESP32-S3-CAM** module, fea
 |---------|-------------|
 | 📹 **Live Streaming** | Real-time MJPEG video at 800x600 resolution, 15-20 fps |
 | 📸 **Photo Capture** | On-demand JPEG snapshots with dynamic resolution switching |
-| 🔄 **Dynamic Resolution** | Change resolution on-the-fly via URL parameters (QVGA/VGA/SVGA) |
+| 🔄 **Dual-Mode System** | **RGB565 + software JPEG** (≤SVGA) + **Hardware JPEG** (XGA+) |
+| 🎯 **Full Resolution** | All 7 resolutions supported: QVGA through **UXGA (1600×1200)** |
 | 🌐 **Web Interface** | Clean, responsive HTML interface accessible from any device |
 | 📱 **Mobile Ready** | Optimized for phones, tablets, and desktop browsers |
 | ⚡ **High Performance** | Dual-buffered frames in 8MB PSRAM for smooth streaming |
 | 🎨 **Camera Controls** | Adjustable brightness, contrast, saturation, white balance |
-| 🔧 **Configurable** | Easy WiFi setup, multiple resolution options |
+| 🔧 **Configurable** | Easy WiFi setup, 7 resolution options (320×240 to 1600×1200) |
 | 🔒 **Secure Config** | WiFi credentials stored in git-ignored config file |
-| 🛠 **OV2640 Workaround** | RGB565 format with software JPEG encoding bypasses hardware bugs |
+| 🛠 **OV2640 Workaround** | Dual-mode architecture bypasses hardware JPEG encoder bugs |
 
 ---
 
@@ -144,9 +145,13 @@ Open your browser and navigate to the displayed IP address:
 | `http://192.168.1.xxx` | Main web interface with controls |
 | `http://192.168.1.xxx:81/stream` | Direct MJPEG stream (no HTML) |
 | `http://192.168.1.xxx/capture` | Single JPEG snapshot (default SVGA) |
-| `http://192.168.1.xxx/capture?res=vga` | Capture at VGA resolution (640x480) |
-| `http://192.168.1.xxx/capture?res=qvga` | Capture at QVGA resolution (320x240) |
-| `http://192.168.1.xxx/capture?res=svga` | Capture at SVGA resolution (800x600) |
+| `http://192.168.1.xxx/capture?res=qvga` | Capture at QVGA (320×240) - RGB565 mode |
+| `http://192.168.1.xxx/capture?res=vga` | Capture at VGA (640×480) - RGB565 mode |
+| `http://192.168.1.xxx/capture?res=svga` | Capture at SVGA (800×600) - RGB565 mode |
+| `http://192.168.1.xxx/capture?res=xga` | Capture at XGA (1024×768) - Hardware JPEG |
+| `http://192.168.1.xxx/capture?res=hd` | Capture at HD (1280×720) - Hardware JPEG |
+| `http://192.168.1.xxx/capture?res=sxga` | Capture at SXGA (1280×1024) - Hardware JPEG |
+| `http://192.168.1.xxx/capture?res=uxga` | Capture at UXGA (1600×1200) - Hardware JPEG |
 
 ---
 
@@ -217,40 +222,56 @@ curl "http://192.168.1.29/capture?res=qvga" -o photo_320x240.jpg
 curl "http://192.168.1.29/capture?res=svga" -o photo_800x600.jpg
 ```
 
-#### ⚠️ Supported Resolutions (RGB565 Format)
+#### ✅ Dual-Mode Resolution Support
 
-Due to **OV2640 hardware JPEG encoder bugs**, this project uses **RGB565 + software JPEG encoding**. This limits maximum resolution to **SVGA (800x600)** due to buffer size constraints:
+This project uses an **intelligent dual-mode system** to bypass OV2640 hardware JPEG bugs while utilizing the full 2MP sensor capability:
 
-| Setting | Resolution | Buffer Size | Status | Use Case |
-|---------|-----------|-------------|--------|----------|
-| `FRAMESIZE_96X96` | 96×96 | 18KB | ✅ **Works** | Thumbnail |
-| `FRAMESIZE_QQVGA` | 160×120 | 38KB | ✅ **Works** | Very low bandwidth |
-| `FRAMESIZE_QCIF` | 176×144 | 51KB | ✅ **Works** | Legacy format |
-| `FRAMESIZE_QVGA` | 320×240 | 154KB | ✅ **Works** | Low bandwidth (~2KB JPEG) |
-| `FRAMESIZE_CIF` | 400×296 | 237KB | ✅ **Works** | Medium quality |
-| `FRAMESIZE_VGA` | 640×480 | 614KB | ✅ **Works** | Good quality (~6KB JPEG) |
-| `FRAMESIZE_SVGA` | 800×600 | 960KB | ✅ **Works** | **Best quality (~10KB JPEG)** |
-| `FRAMESIZE_XGA` | 1024×768 | 1.57MB | ❌ **Crashes** | Stack overflow |
-| `FRAMESIZE_HD` | 1280×720 | 1.84MB | ❌ **Crashes** | Stack overflow |
-| `FRAMESIZE_SXGA` | 1280×1024 | 2.62MB | ❌ **Crashes** | Stack overflow |
-| `FRAMESIZE_UXGA` | 1600×1200 | 3.84MB | ❌ **Crashes** | Stack overflow |
+**Mode Selection Strategy:**
+- **Resolutions ≤ SVGA (800×600)**: RGB565 format + software JPEG encoding
+- **Resolutions > SVGA**: Hardware JPEG encoder + header patching
 
-> 🔴 **Important**: Resolutions above SVGA cause stack canary watchpoint errors due to RGB565 buffer size exceeding camera task stack allocation. The camera will crash and reboot if XGA or higher is requested.
+| Resolution | Mode | JPEG Size | Status | Use Case |
+|-----------|------|-----------|--------|----------|
+| **QVGA** (320×240) | RGB565 | ~2.8KB | ✅ **Validated** | Low bandwidth |
+| **VGA** (640×480) | RGB565 | ~7.7KB | ✅ **Validated** | Good quality |
+| **SVGA** (800×600) | RGB565 | ~11KB | ✅ **Validated** | Best for streaming |
+| **XGA** (1024×768) | Hardware JPEG | ~46KB | ✅ **Validated** | High quality |
+| **HD** (1280×720) | Hardware JPEG | ~52KB | ✅ **Validated** | Widescreen |
+| **SXGA** (1280×1024) | Hardware JPEG | ~81KB | ✅ **Validated** | High detail |
+| **UXGA** (1600×1200) | Hardware JPEG | ~138KB | ✅ **Validated** | **Full 2MP sensor** |
 
-#### Technical Details: Why RGB565 Format?
+> ✅ **All resolutions validated** with `jpeginfo` - 100% compliant JPEGs
+> ⚠️ **Network Note**: High-resolution transfers (UXGA) may take 30-60 seconds on slow WiFi (3-5 KB/s)
 
-The OV2640's **hardware JPEG encoder has a firmware bug** that produces malformed JPEG headers (`FF D8 FF 10` instead of `FF D8 FF E0`). Attempts to patch headers or manipulate quantization tables all failed validation.
+#### Technical Details: Dual-Mode Architecture
 
-**Solution**: 
-- Capture in **PIXFORMAT_RGB565** (raw uncompressed format)
-- Use ESP32's **software JPEG encoder** (`frame2jpg()` from `img_converters.h`)
-- Produces **100% valid JPEGs** that pass `jpeginfo` validation
-- Trade-off: Higher memory usage limits maximum resolution to SVGA
+The OV2640's **hardware JPEG encoder has a firmware bug** that produces malformed JPEG headers (`FF D8 FF 10` instead of `FF D8 FF E0`). The dual-mode system provides the best of both worlds:
 
-**Performance Impact**:
-- SVGA (800x600): ~960KB RGB565 → ~10KB JPEG in 420ms
-- VGA (640x480): ~614KB RGB565 → ~6KB JPEG in 270ms  
-- QVGA (320x240): ~154KB RGB565 → ~2KB JPEG in 65ms
+**🔵 RGB565 Mode (≤ SVGA):**
+- Captures in **PIXFORMAT_RGB565** (raw uncompressed format)
+- Uses ESP32's **software JPEG encoder** (`frame2jpg()` from `img_converters.h`)
+- Produces **100% valid JPEGs** with no header issues
+- Best for streaming and medium resolutions
+- Buffer size: 154KB (QVGA) to 960KB (SVGA)
+
+**🟢 Hardware JPEG Mode (XGA+):**
+- Uses OV2640's **hardware JPEG encoder** for efficiency
+- Applies **automatic header patching** (FF D8 FF 10 → FF D8 FF E0)
+- Enables full **2MP sensor capability** (1600×1200 UXGA)
+- Efficient encoding with smaller file sizes
+- No RGB565 buffer overhead
+
+**Performance Comparison**:
+- SVGA RGB565: ~960KB buffer → ~11KB JPEG in 420ms
+- XGA Hardware: Direct JPEG → ~46KB in 180ms  
+- UXGA Hardware: Direct JPEG → ~138KB in 350ms
+
+**Automatic Mode Switching:**
+```cpp
+bool shouldUseRGB565Mode(framesize_t fs) {
+    return fs <= FRAMESIZE_SVGA;  // Auto-select based on resolution
+}
+```
 
 ### Image Quality Settings
 
@@ -353,61 +374,52 @@ RSSI: -50 dBm  // Signal strength (>-70 is good)
 
 | Symptom | Cause | Improvement |
 |---------|-------|-------------|
-| Low FPS (<10) | High resolution | Switch to VGA or lower |
+| Low FPS (<10) | High resolution | Use SVGA or lower for streaming |
 | Laggy stream | WiFi interference | Move closer to router |
 | Memory errors | Memory leak | Power cycle ESP32 |
-| Slow capture | RGB565 conversion | Normal for software JPEG (420ms @ SVGA) |
-| Crash on XGA/HD/UXGA | Buffer too large | **Use SVGA or lower only** |
-| "Stack canary watchpoint" | Resolution too high | Limit to SVGA maximum |
+| Slow capture (RGB565) | Software encoding | Normal (65-420ms based on resolution) |
+| Slow transfer (UXGA) | WiFi speed | Normal on slow networks (30-60s @ 3KB/s) |
+| Timeout on high-res | Network speed | Increase HTTP timeout in code |
+| Mode switch delay | Camera reinit | Normal 500ms stabilization time |
 
 ---
 
 ## 📊 Performance Metrics
 
-### Measured Performance (RGB565 + Software JPEG Encoding)
+### Measured Performance (Dual-Mode System)
 
-#### SVGA Resolution (800x600, Quality 12)
+#### RGB565 Mode Performance
 
-| Metric | Value |
-|--------|-------|
-| **Capture Time** | 420ms (RGB565 → JPEG conversion) |
-| **JPEG Size** | ~10KB per frame |
-| **Compression Ratio** | 1.0% (960KB RGB565 → 10KB JPEG) |
-| **Network Throughput** | 87-93 KB/s |
-| **RAM Usage** | 55KB / 320KB (16.9%) |
-| **Flash Usage** | 792KB / 3MB (25.2%) |
-| **PSRAM Buffer** | 960KB (RGB565 frame buffer) |
+| Resolution | Capture Time | JPEG Size | Network Speed | Buffer Size |
+|-----------|-------------|-----------|---------------|-------------|
+| **QVGA** (320×240) | 65ms | ~2.8KB | 21 KB/s | 154KB |
+| **VGA** (640×480) | 270ms | ~7.7KB | 27 KB/s | 614KB |
+| **SVGA** (800×600) | 420ms | ~11KB | 21 KB/s | 960KB |
 
-#### VGA Resolution (640x480, Quality 12)
+#### Hardware JPEG Mode Performance
 
-| Metric | Value |
-|--------|-------|
-| **Capture Time** | 270ms (RGB565 → JPEG conversion) |
-| **JPEG Size** | ~6KB per frame |
-| **Compression Ratio** | 1.0% (614KB RGB565 → 6KB JPEG) |
-| **Network Throughput** | 78 KB/s |
-| **PSRAM Buffer** | 614KB (RGB565 frame buffer) |
+| Resolution | Capture Time | JPEG Size | Network Speed | Transfer Time |
+|-----------|-------------|-----------|---------------|---------------|
+| **XGA** (1024×768) | 180ms | ~46KB | 4.9 KB/s | ~10s |
+| **HD** (1280×720) | 220ms | ~52KB | 1.3 KB/s | ~40s |
+| **SXGA** (1280×1024) | 300ms | ~81KB | 4.5 KB/s | ~18s |
+| **UXGA** (1600×1200) | 350ms | ~138KB | 3.2 KB/s | ~45s |
 
-#### QVGA Resolution (320x240, Quality 12)
-
-| Metric | Value |
-|--------|-------|
-| **Capture Time** | 65ms (RGB565 → JPEG conversion) |
-| **JPEG Size** | ~2KB per frame |
-| **Compression Ratio** | 1.4% (154KB RGB565 → 2KB JPEG) |
-| **Network Throughput** | 695 KB/s |
-| **PSRAM Buffer** | 154KB (RGB565 frame buffer) |
+> ⚠️ **Note**: Network speeds shown reflect WiFi limitations (3-5 KB/s on Netgear WNR3500L v2), not ESP32 performance. HTTP timeouts set to 120s to accommodate slow transfers.
 
 #### System Resources
 
 | Metric | Value |
 |--------|-------|
+| **RAM Usage** | 55KB / 320KB (16.9%) |
+| **Flash Usage** | 792KB / 3MB (25.2%) |
 | **Boot Time** | ~3-4 seconds to WiFi |
-| **WiFi Stability** | 802.11b/g, Google WiFi optimized |
+| **WiFi Stability** | 802.11b/g, Netgear WNR3500L v2 |
 | **Power Draw** | 250-300mA active, 150mA idle |
 | **Heap Free** | 222KB during operation |
+| **HTTP Timeout** | 120 seconds (recv/send) |
 
-### Memory Architecture (RGB565 Mode)
+### Memory Architecture (Dual-Mode System)
 
 ```
 ┌─────────────────────────────────────┐
@@ -417,16 +429,20 @@ RSSI: -50 dBm  // Signal strength (>-70 is good)
 │  ├─ Firmware code & vars: ~55KB    │
 │  └─ Stack & heap: ~265KB free      │
 ├─────────────────────────────────────┤
-│ PSRAM (8MB) - RGB565 Buffers        │
-│  ├─ Frame Buffer 1: 960KB (SVGA)   │
-│  ├─ Frame Buffer 2: 960KB (SVGA)   │
-│  └─ Available: ~6.1MB              │
+│ PSRAM (8MB) - Dynamic Buffers       │
 │                                     │
-│  Buffer sizes by resolution:       │
+│  RGB565 Mode (≤SVGA):              │
 │  • QVGA: 154KB × 2 = 308KB         │
 │  • VGA:  614KB × 2 = 1.2MB         │
 │  • SVGA: 960KB × 2 = 1.9MB         │
-│  • XGA:  1.57MB × 2 = 3.1MB (⚠️)   │
+│                                     │
+│  Hardware JPEG Mode (XGA+):        │
+│  • XGA:  ~150KB × 2 = ~300KB       │
+│  • HD:   ~180KB × 2 = ~360KB       │
+│  • SXGA: ~250KB × 2 = ~500KB       │
+│  • UXGA: ~350KB × 2 = ~700KB       │
+│                                     │
+│  ✅ All resolutions fully supported │
 ├─────────────────────────────────────┤
 │ Flash (16MB)                        │
 │  ├─ Bootloader: ~15KB              │
@@ -435,47 +451,59 @@ RSSI: -50 dBm  // Signal strength (>-70 is good)
 │  └─ Available: ~15.2MB             │
 └─────────────────────────────────────┘
 
-Note: XGA and higher resolutions exceed 
-camera task stack limits and will crash.
+Mode switching via camera reinit:
+• Deinit → Change format → Reinit
+• 500ms delay for sensor stabilization
 ```
 
 ---
 
 ## 🔬 Technical Architecture
 
-### Software Stack (RGB565 + Software JPEG)
+### Software Stack (Dual-Mode Architecture)
 
 ```
-┌──────────────────────────────────────┐
-│  Web Browser (Client)                │
-├──────────────────────────────────────┤
-│  HTTP/MJPEG Stream                   │
-├──────────────────────────────────────┤
-│  WiFi (802.11 b/g @ 2.4GHz)         │
-│  • Google WiFi optimized             │
-│  • Channel pre-scan                  │
-│  • Power save disabled               │
-├──────────────────────────────────────┤
-│  ESP-IDF HTTP Server                 │
-│  ├─ Port 80: UI + Capture (dynamic) │
-│  └─ Port 81: MJPEG Stream           │
-├──────────────────────────────────────┤
-│  Software JPEG Encoder ⭐ NEW        │
-│  • frame2jpg() from img_converters  │
-│  • Bypasses OV2640 hardware bugs    │
-│  • 100% valid JPEG output           │
-│  • Quality adjustable (10-63)       │
-├──────────────────────────────────────┤
-│  Camera Driver (esp_camera.h)        │
-│  ├─ RGB565 frame grabber            │
-│  ├─ Dynamic resolution switching     │
-│  ├─ Camera deinit/reinit support    │
-│  └─ PSRAM buffer management         │
-├──────────────────────────────────────┤
-│  OV2640 Sensor (I2C + Parallel)      │
-│  • RGB565 raw format                │
-│  • Hardware JPEG encoder disabled   │
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  Web Browser (Client)                    │
+├──────────────────────────────────────────┤
+│  HTTP/MJPEG Stream                       │
+├──────────────────────────────────────────┤
+│  WiFi (802.11 b/g @ 2.4GHz)             │
+│  • Netgear WNR3500L v2 (SSID: INTERNET1)│
+│  • 3-5 KB/s throughput                   │
+│  • 120s HTTP timeout for large images   │
+├──────────────────────────────────────────┤
+│  ESP-IDF HTTP Server                     │
+│  ├─ Port 80: UI + Capture (7 res modes) │
+│  └─ Port 81: MJPEG Stream (SVGA)        │
+├──────────────────────────────────────────┤
+│  🔵 RGB565 Mode (≤SVGA)                  │
+│  • frame2jpg() software encoder         │
+│  • 100% valid JPEG output               │
+│  • QVGA/VGA/SVGA resolutions            │
+├──────────────────────────────────────────┤
+│  🟢 Hardware JPEG Mode (XGA+)            │
+│  • OV2640 hardware encoder              │
+│  • Automatic header patching            │
+│  • XGA/HD/SXGA/UXGA resolutions         │
+│  • patchJPEGHeader() fixes FF D8 FF 10  │
+├──────────────────────────────────────────┤
+│  Mode Selector (shouldUseRGB565Mode)     │
+│  • Automatic based on resolution        │
+│  • Camera reinit on mode switch         │
+│  • 500ms stabilization delay            │
+├──────────────────────────────────────────┤
+│  Camera Driver (esp_camera.h)            │
+│  ├─ Dynamic pixel format (RGB565/JPEG) │
+│  ├─ Resolution switching via reinit     │
+│  ├─ Dual buffering in PSRAM             │
+│  └─ GRAB_LATEST mode                    │
+├──────────────────────────────────────────┤
+│  OV2640 Sensor (I2C + Parallel)          │
+│  • 2MP sensor (1600×1200 max)           │
+│  • Dual-mode operation                  │
+│  • Full resolution capability unlocked  │
+└──────────────────────────────────────────┘
 ```
 
 ### Network Configuration
@@ -490,28 +518,42 @@ camera task stack limits and will crash.
 | **Receive Timeout** | 10s | Client request timeout |
 | **LRU Purge** | Enabled | Close oldest idle connections |
 
-### Frame Buffer Strategy (RGB565 Mode)
+### Frame Buffer Strategy (Dual-Mode Configuration)
+
+**Automatic pixel format selection based on resolution:**
 
 ```cpp
-config.pixel_format = PIXFORMAT_RGB565;  // Raw RGB format (bypasses JPEG bugs)
-config.frame_size = FRAMESIZE_SVGA;      // 800x600 default
-config.fb_count = 2;                     // Dual buffering
-config.fb_location = CAMERA_FB_IN_PSRAM; // Use PSRAM (8MB)
-config.grab_mode = CAMERA_GRAB_LATEST;   // Skip old frames
+// RGB565 Mode (≤SVGA)
+if (shouldUseRGB565Mode(framesize)) {
+    config.pixel_format = PIXFORMAT_RGB565;  // Software JPEG encoding
+    config.jpeg_quality = 12;                // For frame2jpg()
+    config.fb_count = 2;                     // Dual buffering
+}
+// Hardware JPEG Mode (XGA+)
+else {
+    config.pixel_format = PIXFORMAT_JPEG;    // Hardware encoder
+    config.jpeg_quality = 6;                 // OV2640 quality
+    config.fb_count = 2;                     // Dual buffering
+}
+
+// Common settings
+config.fb_location = CAMERA_FB_IN_PSRAM;     // Use 8MB PSRAM
+config.grab_mode = CAMERA_GRAB_LATEST;       // Skip old frames
 ```
 
-**Benefits:**
-- ✅ **100% valid JPEG output** (software encoder)
-- ✅ Smooth streaming without frame drops
-- ✅ Latest frame always available
-- ✅ No internal RAM pressure
-- ✅ Dynamic resolution switching via camera reinit
+**Mode Switching Process:**
+1. Detect resolution change in `/capture?res=xxx`
+2. Call `esp_camera_deinit()` to release current mode
+3. Wait 500ms for sensor stabilization
+4. Call `initCamera(new_resolution)` with appropriate pixel format
+5. Capture frame in new mode
 
-**Trade-offs:**
-- ⚠️ Larger buffer sizes (960KB vs ~90KB for hardware JPEG)
-- ⚠️ Software JPEG encoding adds 65-420ms per capture
-- ⚠️ Maximum resolution limited to SVGA (800x600)
-- ⚠️ Higher resolutions (XGA+) cause stack overflow crashes
+**Benefits:**
+- ✅ **100% valid JPEG output** in both modes
+- ✅ Full 2MP sensor capability (UXGA 1600×1200)
+- ✅ Optimized memory usage per resolution
+- ✅ Smooth streaming without frame drops
+- ✅ Automatic mode selection (transparent to user)
 
 ---
 
